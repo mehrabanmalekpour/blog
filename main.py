@@ -1,3 +1,4 @@
+
 from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -18,12 +19,12 @@ class Student(SQLModel, table=True):
     birth_date: str
     address: str = Field(max_length=100)
     postal_code: str = Field(max_length=10, min_length=10)
+    cphone: str
     hphone: str
     department: str
     major: str
     married: str
     id: str = Field(max_length=10, min_length=10)
-    course_id: str = Field(max_length=25)
 
     class Config:
         validate_assignment = True
@@ -33,7 +34,7 @@ class Student(SQLModel, table=True):
     @validator("stid", pre=True)
     def validate_stid(cls, v):
         if not isinstance(v, str) or not (v.startswith("403114150") and len(v) == 11 and v[9:].isdigit()):
-            raise ValueError("شماره دانشجویی باید با 403114150 شروع شده و دو رقم آخر عدد باشد")
+            raise ValueError("شماره دانشجویی باید با 403114150 شروع شده و همه کاراکترهای آن عدد باشد")
         return v
 
     @validator("student_fname", pre=True)
@@ -62,7 +63,7 @@ class Student(SQLModel, table=True):
 
     @validator("ids_letter", pre=True)
     def validate_ids_letter(cls, v):
-        persian_letters = "ا ب پ ت ث ج چ ح خ دذرزژس ش ص ض ط ظ ع غ ف ق ک گ ل م ن وه ی"
+        persian_letters = "الفبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی"
         if not isinstance(v, str) or v not in persian_letters:
             raise ValueError("حرف سریال شناسنامه باید یکی از حروف الفبای فارسی باشد")
         return v
@@ -99,8 +100,8 @@ class Student(SQLModel, table=True):
 
     @validator("address", pre=True)
     def validate_address(cls, v):
-        if not isinstance(v, str) or len(v) > 100:
-            raise ValueError("آدرس باید حداکثر ۱۰۰ کاراکتر باشد")
+        if not isinstance(v, str) or len(v) > 100 or not re.match(r'^[\u0600-\u06FF\s]+$', v):
+            raise ValueError("آدرس باید حداکثر ۱۰۰ کاراکتر و شامل حروف فارسی باشد")
         return v
 
     @validator("postal_code", pre=True)
@@ -109,10 +110,16 @@ class Student(SQLModel, table=True):
             raise ValueError("کد پستی باید عدد ۱۰ رقمی باشد")
         return v
 
+    @validator("cphone")
+    def validate_cphone(cls, v):
+        if not re.match(r'^09\d{9}$', v):
+            raise ValueError("تلفن همراه باید مطابق استاندارد ایران باشد (مثال:*********09")
+        return v
+
     @validator("hphone", pre=True)
     def validate_hphone(cls, v):
         if not isinstance(v, str) or not re.match(r'^0\d{2,3}\d{8}$', v):
-            raise ValueError("تلفن ثابت باید مطابق استاندارد ایران باشد (مثال: ۰۲۱۱۲۳۴۵۶۷۸)")
+            raise ValueError("تلفن ثابت باید مطابق استاندارد ایران باشد (مثال:********021)")
         return v
 
     @validator("department", pre=True)
@@ -123,7 +130,7 @@ class Student(SQLModel, table=True):
         return v
 
     @validator("major", pre=True)
-    def validate_major(cls, v):
+    def validate_major(cls, v, values):
         majors = {
             "فنی مهندسی": [
                 "مهندسی کامپیوتر", "مهندسی برق", "مهندسی مکانیک", "مهندسی عمران",
@@ -142,10 +149,12 @@ class Student(SQLModel, table=True):
         }
         if not isinstance(v, str):
             raise ValueError("رشته تحصیلی باید رشته باشد")
-        for dept, major_list in majors.items():
-            if v in major_list:
-                return v
-        raise ValueError("رشته تحصیلی باید یکی از رشته‌های مرتبط با دانشکده باشد")
+        department = values.get("department")
+        if department not in majors:
+            raise ValueError("دانشکده نامعتبر است")
+        if v not in majors[department]:
+            raise ValueError(f"رشته {v} با دانشکده {department} سازگار نیست")
+        return v
 
     @validator("married", pre=True)
     def validate_married(cls, v):
@@ -159,13 +168,6 @@ class Student(SQLModel, table=True):
             raise ValueError("کد ملی باید عدد ۱۰ رقمی باشد")
         return v
 
-    @validator("course_id")
-    def validate_course_id(cls, v):
-        if not re.match(r'^[آ-ی0-9]+$', v):
-            raise ValueError("کد درس باید فقط شامل حروف فارسی و ارقام باشد و فاقد علائم خاص باشد.")
-        if len(v) > 25:
-            raise ValueError("کد درس نباید بیش از ۲۵ کاراکتر باشد.")
-        return v
 class Teacher(SQLModel, table=True):
     lid: str = Field(primary_key=True)
     fname: str
@@ -193,8 +195,8 @@ class Teacher(SQLModel, table=True):
 
     @validator("fname", "lname")
     def validate_name_fields(cls, v):
-        if not re.fullmatch(r'[آ-ی\s]{1,10}', v):
-            raise ValueError("نام و نام خانوادگی باید حداکثر ۱۰ کاراکتر فارسی باشند")
+        if not re.match(r'^[\u0600-\u06FF\s]+$', v):
+            raise ValueError("نام و نام خانوادگی باید شامل کاراکترهای فارسی باشند")
         return v
 
     @validator("national_id")
@@ -211,7 +213,7 @@ class Teacher(SQLModel, table=True):
         return v
 
     @validator("major", pre=True)
-    def validate_major(cls, v):
+    def validate_major(cls, v, values):
         majors = {
             "فنی مهندسی": [
                 "مهندسی کامپیوتر", "مهندسی برق", "مهندسی مکانیک", "مهندسی عمران",
@@ -230,10 +232,12 @@ class Teacher(SQLModel, table=True):
         }
         if not isinstance(v, str):
             raise ValueError("رشته تحصیلی باید رشته باشد")
-        for dept, major_list in majors.items():
-            if v in major_list:
-                return v
-        raise ValueError("رشته تحصیلی باید یکی از رشته‌های مرتبط با دانشکده باشد")
+        department = values.get("department")
+        if department not in majors:
+            raise ValueError("دانشکده نامعتبر است")
+        if v not in majors[department]:
+            raise ValueError(f"رشته {v} با دانشکده {department} سازگار نیست")
+        return v
 
     @validator("birth_date")
     def validate_birth_date(cls, v):
@@ -257,6 +261,12 @@ class Teacher(SQLModel, table=True):
             raise ValueError("شهر تولد باید یکی از مراکز استان باشد")
         return v
 
+    @validator("address", pre=True)
+    def validate_address(cls, v):
+        if not isinstance(v, str) or len(v) > 100 or not re.match(r'^[\u0600-\u06FF\s]+$', v):
+            raise ValueError("آدرس باید حداکثر ۱۰۰ کاراکتر و شامل حروف فارسی باشد")
+        return v
+
     @validator("postal_code")
     def validate_postal_code(cls, v):
         if not v.isdigit() or len(v) != 10:
@@ -266,15 +276,15 @@ class Teacher(SQLModel, table=True):
     @validator("cphone")
     def validate_cphone(cls, v):
         if not re.match(r'^09\d{9}$', v):
-            raise ValueError("تلفن همراه نامعتبر است")
+            raise ValueError("تلفن همراه باید مطابق استاندارد ایران باشد (مثال:*********09")
         return v
 
     @validator("hphone")
     def validate_hphone(cls, v):
         if not re.match(r'^0\d{2,3}\d{8}$', v):
-            raise ValueError("تلفن ثابت نامعتبر است")
+            raise ValueError("تلفن ثابت باید مطابق استاندارد ایران باشد (مثال:********021")
         return v
-    
+
 class Course(SQLModel, table=True):
     cid: str = Field(primary_key=True)
     cname: str
@@ -310,6 +320,7 @@ class Course(SQLModel, table=True):
         if not isinstance(v, int) or not (1 <= v <= 4):
             raise ValueError("تعداد واحد باید بین ۱ تا ۴ باشد")
         return v
+
 sqlite_file_name = "database.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
 
@@ -419,9 +430,6 @@ def delete_teacher(lid: str, session: SessionDep):
     session.delete(teacher)
     session.commit()
     return {"ok": True}
-
-
-
 
 @app.post("/courses/")
 def create_course(course: Course, session: SessionDep) -> Course:
